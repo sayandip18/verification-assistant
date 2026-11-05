@@ -5,7 +5,8 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { NEXT_ACTIONS, STATUS_CLASS, STATUS_LABEL } from "@/lib/labels";
-import type { Application, ApplicationStatus } from "@/lib/types";
+import { mergeExtracted } from "@/lib/extract";
+import type { Application, ApplicationDraft, ApplicationStatus, OcrResult } from "@/lib/types";
 
 export default function ApplicationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -17,12 +18,15 @@ export default function ApplicationDetailPage() {
   const [owner, setOwner] = useState("");
   const [khajna, setKhajna] = useState("");
 
-  async function load() {
-    const data = await api.get(params.id);
+  function applyItem(data: Application) {
     setItem(data);
     setTransferor(data.transferor_name ?? "");
     setOwner(data.recorded_owner_name ?? "");
     setKhajna(data.khajna_status ?? "");
+  }
+
+  async function load() {
+    applyItem(await api.get(params.id));
   }
 
   useEffect(() => {
@@ -38,7 +42,7 @@ export default function ApplicationDetailPage() {
         recorded_owner_name: owner,
         khajna_status: khajna,
       });
-      setItem(updated);
+      applyItem(updated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Update failed");
     }
@@ -48,8 +52,7 @@ export default function ApplicationDetailPage() {
     if (!item) return;
     setError(null);
     try {
-      const updated = await api.transition(item.id, status, remarks || undefined, language);
-      setItem(updated);
+      applyItem(await api.transition(item.id, status, remarks || undefined, language));
       setRemarks("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Transition failed");
@@ -119,13 +122,15 @@ export default function ApplicationDetailPage() {
                 const file = event.target.files?.[0];
                 if (!file) return;
                 try {
-                  setItem(await api.upload(item.id, { saleDeed: file }));
+                  applyItem(await api.upload(item.id, { saleDeed: file }));
                 } catch (err) {
                   setError(err instanceof Error ? err.message : "Upload failed");
                 }
               }}
             />
-            {item.sale_deed_path && <span className="text-xs text-ink/50">Stored</span>}
+            {item.documents.some((doc) => doc.document_type === "SALE_DEED") && (
+              <span className="text-xs text-ink/50">Stored in blob storage</span>
+            )}
           </label>
           <label className="block text-sm">
             Existing Porcha
@@ -136,13 +141,15 @@ export default function ApplicationDetailPage() {
                 const file = event.target.files?.[0];
                 if (!file) return;
                 try {
-                  setItem(await api.upload(item.id, { porcha: file }));
+                  applyItem(await api.upload(item.id, { porcha: file }));
                 } catch (err) {
                   setError(err instanceof Error ? err.message : "Upload failed");
                 }
               }}
             />
-            {item.porcha_path && <span className="text-xs text-ink/50">Stored</span>}
+            {item.documents.some((doc) => doc.document_type === "PORCHA") && (
+              <span className="text-xs text-ink/50">Stored in blob storage</span>
+            )}
           </label>
         </div>
 
@@ -180,6 +187,41 @@ export default function ApplicationDetailPage() {
         </div>
       </section>
 
+      {(item.ocr_results ?? []).length > 0 && (
+        <section className="space-y-3">
+          <h2 className="font-medium">OCR results</h2>
+          {item.ocr_results.map((run) => (
+            <OcrCard
+              key={`${run.document_id}-${run.created_at}`}
+              run={run}
+              onRerun={async () => {
+                if (!run.document_id) return;
+                setError(null);
+                try {
+                  applyItem(await api.rerunOcr(item.id, run.document_id));
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "OCR failed");
+                }
+              }}
+              onFillEmpty={() => {
+                if (!run.extracted) return;
+                const filled = mergeExtracted(
+                  {
+                    transferor_name: transferor,
+                    recorded_owner_name: owner,
+                    khajna_status: khajna,
+                  },
+                  run.extracted as Partial<ApplicationDraft>
+                );
+                setTransferor(String(filled.transferor_name ?? ""));
+                setOwner(String(filled.recorded_owner_name ?? ""));
+                setKhajna(String(filled.khajna_status ?? ""));
+              }}
+            />
+          ))}
+        </section>
+      )}
+
       <section className="rounded-lg border border-ink/10 bg-white">
         <h2 className="border-b border-ink/10 px-4 py-3 font-medium">Audit trail</h2>
         <ol className="divide-y divide-ink/10">
@@ -188,12 +230,69 @@ export default function ApplicationDetailPage() {
               <p className="font-medium">
                 {entry.previous_status ?? "—"} → {STATUS_LABEL[entry.new_status]}
               </p>
-              <p className="text-ink/50">{new Date(entry.timestamp).toLocaleString()}</p>
+              <p className="text-ink/50">{new Date(entry.created_at).toLocaleString()}</p>
               {entry.officer_remarks && <p className="mt-1">{entry.officer_remarks}</p>}
             </li>
           ))}
         </ol>
       </section>
+    </div>
+  );
+}
+
+function OcrCard({
+  run,
+  onRerun,
+  onFillEmpty,
+}: {
+  run: OcrResult;
+  onRerun: () => void;
+  onFillEmpty: () => void;
+}) {
+  const failed = run.status === "FAILED";
+  return (
+    <div className={`rounded-lg border px-4 py-3 text-sm ${failed ? "border-rose-200 bg-rose-50" : "border-ink/10 bg-white"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">
+          {run.document_type === "SALE_DEED" ? "Sale deed" : run.document_type === "PORCHA" ? "Porcha" : "Document"}{" "}
+          <span className="font-normal text-ink/50">{run.original_filename}</span>
+        </p>
+        <p className="text-xs uppercase tracking-wide text-ink/50">
+          {run.status}
+          {run.engine ? ` · ${run.engine}` : ""}
+        </p>
+      </div>
+      {run.warning && <p className="mt-1 text-ink/70">{run.warning}</p>}
+      {run.error && <p className="mt-1 text-rose-800">{run.error}</p>}
+      {run.extracted && (
+        <dl className="mt-2 grid gap-1 sm:grid-cols-2">
+          {Object.entries(run.extracted)
+            .filter(([, value]) => value !== null && value !== "")
+            .map(([key, value]) => (
+              <div key={key}>
+                <dt className="text-xs uppercase tracking-wide text-ink/50">{key.replaceAll("_", " ")}</dt>
+                <dd>{String(value)}</dd>
+              </div>
+            ))}
+        </dl>
+      )}
+      {run.applied_fields.length > 0 && (
+        <p className="mt-2 text-xs text-ink/50">Filled empty fields: {run.applied_fields.join(", ")}</p>
+      )}
+      {run.raw_text && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-forest">Show OCR text</summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-ink/5 p-2 text-xs">{run.raw_text}</pre>
+        </details>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={onFillEmpty} className="rounded border border-forest px-3 py-1 text-xs text-forest">
+          Fill empty verification fields
+        </button>
+        <button type="button" onClick={onRerun} className="rounded border border-ink/20 px-3 py-1 text-xs">
+          Re-run OCR
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import type { ApplicationDraft } from "@/lib/types";
+import { mergeExtracted } from "@/lib/extract";
+import type { ApplicationDraft, OcrScan } from "@/lib/types";
 
 const empty: ApplicationDraft = {
   applicant_name: "",
@@ -20,23 +21,48 @@ export default function NewApplicationPage() {
   const router = useRouter();
   const [form, setForm] = useState<ApplicationDraft>(empty);
   const [ocr, setOcr] = useState("");
+  const [ocrNote, setOcrNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState<string | null>(null);
+  const [saleDeed, setSaleDeed] = useState<File | null>(null);
+  const [porcha, setPorcha] = useState<File | null>(null);
 
   function setField<K extends keyof ApplicationDraft>(key: K, value: ApplicationDraft[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function ingestScan(file: File, documentType: "SALE_DEED" | "PORCHA") {
+    setError(null);
+    setScanning(documentType);
+    try {
+      const result = await api.ocrFile(file, documentType);
+      applyScan(result);
+      if (documentType === "SALE_DEED") setSaleDeed(file);
+      else setPorcha(file);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OCR failed");
+    } finally {
+      setScanning(null);
+    }
+  }
+
+  function applyScan(result: OcrScan) {
+    if (result.raw_text) setOcr(result.raw_text);
+    if (result.status === "FAILED") {
+      setOcrNote(result.error || "OCR failed");
+      return;
+    }
+    setForm((current) => mergeExtracted(current, result.extracted as Partial<ApplicationDraft>));
+    const extras = [result.engine, result.warning].filter(Boolean).join(" · ");
+    setOcrNote(extras || "OCR succeeded");
   }
 
   async function applyExtract() {
     setError(null);
     try {
       const extracted = await api.extract(ocr);
-      setForm((current) => ({
-        ...current,
-        ...Object.fromEntries(
-          Object.entries(extracted).filter(([, value]) => value !== null && value !== undefined && value !== "")
-        ),
-      }));
+      setForm((current) => mergeExtracted(current, extracted as Partial<ApplicationDraft>));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Extraction failed");
     }
@@ -48,6 +74,9 @@ export default function NewApplicationPage() {
     setError(null);
     try {
       const created = await api.create(form);
+      if (saleDeed || porcha) {
+        await api.upload(created.id, { saleDeed: saleDeed ?? undefined, porcha: porcha ?? undefined });
+      }
       router.push(`/applications/${created.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
@@ -81,7 +110,7 @@ export default function NewApplicationPage() {
             <input
               type="number"
               required
-              className="mt-1 w-full rounded border border-ink/20 bg-white px-3 py-2"
+              className="mt-1 w-full rounded border border-ink/20 px-3 py-2"
               value={form.jl_number || ""}
               onChange={(e) => setField("jl_number", Number(e.target.value))}
             />
@@ -90,7 +119,7 @@ export default function NewApplicationPage() {
             <input
               type="number"
               required
-              className="mt-1 w-full rounded border border-ink/20 bg-white px-3 py-2"
+              className="mt-1 w-full rounded border border-ink/20 px-3 py-2"
               value={form.dag_number || ""}
               onChange={(e) => setField("dag_number", Number(e.target.value))}
             />
@@ -99,7 +128,7 @@ export default function NewApplicationPage() {
             <input
               type="number"
               required
-              className="mt-1 w-full rounded border border-ink/20 bg-white px-3 py-2"
+              className="mt-1 w-full rounded border border-ink/20 px-3 py-2"
               value={form.khatian_number || ""}
               onChange={(e) => setField("khatian_number", Number(e.target.value))}
             />
@@ -136,11 +165,39 @@ export default function NewApplicationPage() {
       </form>
 
       <aside className="space-y-3 rounded-lg border border-ink/10 bg-white p-4 lg:col-span-2">
-        <h2 className="font-medium">AI field pre-fill</h2>
+        <h2 className="font-medium">OCR and field pre-fill</h2>
         <p className="text-sm text-ink/60">
-          Paste OCR text from a Dalil or Porcha. The extractor looks for labelled fields such as
-          Applicant, Mouza, J.L. No., Dag, Khatian, Transferor, Recorded owner.
+          Upload a Dalil or Porcha scan (PDF or image). Tesseract reads the page, labelled fields fill
+          blanks on the left, and you can still edit every value. Paste is available as a fallback.
         </p>
+        <label className="block text-sm">
+          Sale deed (Dalil)
+          <input
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,.txt"
+            className="mt-1 block w-full text-sm"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void ingestScan(file, "SALE_DEED");
+            }}
+          />
+          {saleDeed && <span className="text-xs text-ink/50">{saleDeed.name}</span>}
+        </label>
+        <label className="block text-sm">
+          Existing Porcha
+          <input
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,.txt"
+            className="mt-1 block w-full text-sm"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void ingestScan(file, "PORCHA");
+            }}
+          />
+          {porcha && <span className="text-xs text-ink/50">{porcha.name}</span>}
+        </label>
+        {scanning && <p className="text-sm text-ink/60">Reading {scanning === "SALE_DEED" ? "sale deed" : "Porcha"}…</p>}
+        {ocrNote && <p className="text-xs text-ink/60">{ocrNote}</p>}
         <textarea
           className="min-h-40 w-full rounded border border-ink/20 bg-white px-3 py-2 text-sm"
           value={ocr}
@@ -148,7 +205,7 @@ export default function NewApplicationPage() {
           placeholder="Applicant: Aparna Das&#10;Mouza: Shyamnagar&#10;J.L. No.: 42"
         />
         <button type="button" onClick={applyExtract} className="rounded border border-forest px-3 py-1.5 text-sm text-forest">
-          Extract into form
+          Extract pasted text into form
         </button>
       </aside>
     </div>

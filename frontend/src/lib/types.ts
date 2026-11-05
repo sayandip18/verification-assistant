@@ -6,6 +6,20 @@ export type ApplicationStatus =
   | "REJECTED"
   | "RETURNED";
 
+export type DocumentType = "SALE_DEED" | "PORCHA" | "OTHER";
+
+export type OfficerRole = "REVENUE_INSPECTOR" | "EXTENSION_OFFICER" | "SUPERVISOR" | "ADMIN";
+
+export type Officer = {
+  id: string;
+  employee_id: string;
+  email: string;
+  full_name: string;
+  role: OfficerRole;
+  office_code: string | null;
+  is_active: boolean;
+};
+
 export type MismatchFlag = {
   flagged: boolean;
   severity: "info" | "ok" | "high";
@@ -19,7 +33,53 @@ export type HistoryEntry = {
   action_taken_by: string;
   ai_flags_triggered: unknown;
   officer_remarks: string | null;
-  timestamp: string;
+  created_at: string;
+};
+
+export type Document = {
+  id: string;
+  document_type: DocumentType;
+  blob_key: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  uploaded_by_officer_id: string;
+  created_at: string;
+};
+
+export type ExtractedMetadata = {
+  applicant_name: string | null;
+  mouza: string | null;
+  jl_number: number | null;
+  dag_number: number | null;
+  khatian_number: number | null;
+  transferor_name: string | null;
+  recorded_owner_name: string | null;
+  khajna_status: string | null;
+};
+
+export type OcrResult = {
+  document_id: string | null;
+  document_type: DocumentType | null;
+  original_filename: string | null;
+  status: "PENDING" | "SUCCEEDED" | "FAILED";
+  engine: string | null;
+  raw_text: string | null;
+  extracted: ExtractedMetadata | null;
+  applied_fields: string[];
+  warning: string | null;
+  error: string | null;
+  created_at: string;
+};
+
+export type OcrScan = {
+  status: "PENDING" | "SUCCEEDED" | "FAILED";
+  engine: string | null;
+  raw_text: string;
+  extracted: ExtractedMetadata;
+  warning: string | null;
+  error: string | null;
+  page_count: number | null;
 };
 
 export type Application = {
@@ -32,13 +92,14 @@ export type Application = {
   transferor_name: string | null;
   recorded_owner_name: string | null;
   khajna_status: string | null;
-  sale_deed_path: string | null;
-  porcha_path: string | null;
   status: ApplicationStatus;
   assigned_officer_id: string;
+  created_by_officer_id: string;
   created_at: string;
   history: HistoryEntry[];
+  documents: Document[];
   mismatch_flag: MismatchFlag | null;
+  ocr_results: OcrResult[];
 };
 
 export type QueueSummary = {
