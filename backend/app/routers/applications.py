@@ -1,11 +1,13 @@
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.ai import chain_mismatch
+from app.attention import CLOSED_STATUSES, attention_for, attention_sort_key
 from app.blob import make_blob_key, put_bytes
 from app.database import get_db
 from app.deps import get_current_officer
@@ -72,7 +74,11 @@ def _ocr_results(application: Application) -> list[OcrResultOut]:
 
 def _with_flag(application: Application, *, include_ocr: bool = True) -> ApplicationOut:
     payload = ApplicationOut.model_validate(application)
-    payload.mismatch_flag = chain_mismatch(application.transferor_name, application.recorded_owner_name)
+    info = attention_for(application)
+    payload.mismatch_flag = info.mismatch
+    payload.attention_rank = info.rank
+    payload.attention_reason = info.reason
+    payload.next_action = info.next_action
     if include_ocr:
         payload.ocr_results = _ocr_results(application)
     return payload
@@ -102,11 +108,8 @@ async def queue_summary(
     counts = {status: 0 for status in ApplicationStatus}
     for application in applications:
         counts[application.status] += 1
-        flag = chain_mismatch(application.transferor_name, application.recorded_owner_name)
-        if flag["flagged"] and application.status not in {
-            ApplicationStatus.APPROVED,
-            ApplicationStatus.REJECTED,
-        }:
+        info = attention_for(application)
+        if info.mismatch["flagged"] and not info.closed:
             discrepancies += 1
     return QueueSummary(
         submitted=counts[ApplicationStatus.SUBMITTED],
@@ -121,11 +124,20 @@ async def queue_summary(
 async def list_applications(
     db: AsyncSession = Depends(get_db),
     _: Officer = Depends(get_current_officer),
+    view: Literal["open", "all"] = Query(default="open"),
+    status_filter: ApplicationStatus | None = Query(default=None, alias="status"),
+    flagged: bool = Query(default=False),
 ) -> list[ApplicationOut]:
-    result = await db.execute(
-        select(Application).options(*LOAD_OPTIONS).order_by(Application.created_at.desc())
-    )
-    return [_with_flag(item, include_ocr=False) for item in result.scalars().unique().all()]
+    result = await db.execute(select(Application).options(*LOAD_OPTIONS))
+    applications = list(result.scalars().unique().all())
+    if view == "open":
+        applications = [item for item in applications if item.status not in CLOSED_STATUSES]
+    if status_filter is not None:
+        applications = [item for item in applications if item.status == status_filter]
+    if flagged:
+        applications = [item for item in applications if attention_for(item).mismatch["flagged"]]
+    applications.sort(key=attention_sort_key)
+    return [_with_flag(item, include_ocr=False) for item in applications]
 
 
 @router.post("", response_model=ApplicationOut, status_code=status.HTTP_201_CREATED)

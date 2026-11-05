@@ -100,6 +100,9 @@ export type Application = {
   documents: Document[];
   mismatch_flag: MismatchFlag | null;
   ocr_results: OcrResult[];
+  attention_rank: number;
+  attention_reason: string | null;
+  next_action: string | null;
 };
 
 export type QueueSummary = {

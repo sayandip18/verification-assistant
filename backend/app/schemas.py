@@ -127,6 +127,9 @@ class ApplicationOut(BaseModel):
     documents: list[DocumentOut] = []
     mismatch_flag: dict | None = None
     ocr_results: list[OcrResultOut] = []
+    attention_rank: int = 7
+    attention_reason: str | None = None
+    next_action: str | None = None
 
 
 class QueueSummary(BaseModel):

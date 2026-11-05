@@ -36,7 +36,14 @@ export const api = {
   logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
   me: () => request<Officer>("/auth/me"),
   summary: () => request<QueueSummary>("/applications/queue/summary"),
-  list: () => request<Application[]>("/applications"),
+  list: (params?: { view?: "open" | "all"; status?: string; flagged?: boolean }) => {
+    const query = new URLSearchParams();
+    if (params?.view) query.set("view", params.view);
+    if (params?.status) query.set("status", params.status);
+    if (params?.flagged) query.set("flagged", "true");
+    const suffix = query.toString() ? `?${query}` : "";
+    return request<Application[]>(`/applications${suffix}`);
+  },
   get: (id: string) => request<Application>(`/applications/${id}`),
   create: (payload: ApplicationDraft) =>
     request<Application>("/applications", { method: "POST", body: JSON.stringify(payload) }),
