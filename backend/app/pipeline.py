@@ -12,7 +12,7 @@ from app.ocr import OcrError, ocr_bytes
 
 
 async def run_ocr(db: AsyncSession, application: Application, document: Document) -> AiRun:
-    data = get_bytes(document.blob_key)
+    data = await get_bytes(document.blob_key)
     try:
         result = await asyncio.to_thread(ocr_bytes, data, document.content_type, document.original_filename)
         extracted = extract_metadata(result.text, document.document_type.value)

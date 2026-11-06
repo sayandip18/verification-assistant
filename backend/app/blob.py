@@ -1,8 +1,11 @@
+import asyncio
 import uuid
 from functools import lru_cache
 from pathlib import Path
 
 from app.config import settings
+from app.database import SessionLocal
+from app.models import BlobObject
 
 
 def make_blob_key(application_id: uuid.UUID, document_type: str, filename: str) -> str:
@@ -11,13 +14,35 @@ def make_blob_key(application_id: uuid.UUID, document_type: str, filename: str) 
 
 
 def ensure_bucket() -> None:
+    # The "db" backend needs nothing here: the blobs table is created with the rest of the schema.
+    if settings.blob_backend == "db":
+        return
     if settings.blob_backend == "s3":
         _s3_ensure_bucket()
         return
     Path(settings.blob_local_dir).mkdir(parents=True, exist_ok=True)
 
 
-def put_bytes(key: str, data: bytes, content_type: str) -> None:
+async def put_bytes(key: str, data: bytes, content_type: str) -> None:
+    if settings.blob_backend == "db":
+        async with SessionLocal() as session:
+            await session.merge(BlobObject(key=key, content_type=content_type, data=data))
+            await session.commit()
+        return
+    await asyncio.to_thread(_put_sync, key, data, content_type)
+
+
+async def get_bytes(key: str) -> bytes:
+    if settings.blob_backend == "db":
+        async with SessionLocal() as session:
+            blob = await session.get(BlobObject, key)
+            if blob is None:
+                raise FileNotFoundError(key)
+            return blob.data
+    return await asyncio.to_thread(_get_sync, key)
+
+
+def _put_sync(key: str, data: bytes, content_type: str) -> None:
     if settings.blob_backend == "s3":
         _s3_put(key, data, content_type)
         return
@@ -26,12 +51,11 @@ def put_bytes(key: str, data: bytes, content_type: str) -> None:
     path.write_bytes(data)
 
 
-def get_bytes(key: str) -> bytes:
+def _get_sync(key: str) -> bytes:
     if settings.blob_backend == "s3":
         response = _cached_s3().get_object(Bucket=settings.s3_bucket, Key=key)
         return response["Body"].read()
-    path = Path(settings.blob_local_dir) / key
-    return path.read_bytes()
+    return (Path(settings.blob_local_dir) / key).read_bytes()
 
 
 def _s3_client():

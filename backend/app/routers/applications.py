@@ -305,7 +305,7 @@ async def upload_documents(
         filename = upload.filename or f"{document_type.value.lower()}.bin"
         content_type = upload.content_type or "application/octet-stream"
         blob_key = make_blob_key(application.id, document_type.value, filename)
-        put_bytes(blob_key, data, content_type)
+        await put_bytes(blob_key, data, content_type)
         document = Document(
             application_id=application.id,
             document_type=document_type,

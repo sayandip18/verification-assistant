@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, LargeBinary, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -175,3 +175,13 @@ class AiRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     application: Mapped[Application | None] = relationship(back_populates="ai_runs")
+
+
+class BlobObject(Base):
+    """Uploaded file bytes, used when BLOB_BACKEND=db (e.g. everything inside Neon Postgres)."""
+
+    __tablename__ = "blobs"
+
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(255))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
