@@ -149,6 +149,8 @@ export type QueueSummary = {
   ready_for_decision: number;
   returned: number;
   high_priority_discrepancies: number;
+  approved: number;
+  rejected: number;
 };
 
 export type ApplicationDraft = {

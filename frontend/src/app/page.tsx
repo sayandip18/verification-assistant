@@ -19,8 +19,12 @@ const EMPTY: Record<string, string> = {
   FIELD_VERIFICATION: "No files in field verification.",
   READY_FOR_DECISION: "No files waiting on a decision.",
   RETURNED: "No returned files.",
+  APPROVED: "No approved mutations yet.",
+  REJECTED: "No rejected applications yet.",
   flagged: "No open files with an ownership mismatch.",
 };
+
+const CLOSED: ApplicationStatus[] = ["APPROVED", "REJECTED"];
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<QueueSummary | null>(null);
@@ -33,7 +37,7 @@ export default function DashboardPage() {
       filter.id === "all"
         ? { view: "all" as const }
         : filter.id === "status"
-          ? { view: "open" as const, status: filter.status }
+          ? { view: CLOSED.includes(filter.status) ? ("all" as const) : ("open" as const), status: filter.status }
           : filter.id === "flagged"
             ? { view: "open" as const, flagged: true }
             : { view: "open" as const };
@@ -116,6 +120,28 @@ export default function DashboardPage() {
         </section>
       )}
 
+      {summary && (
+        <section>
+          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">Decided</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <Stat
+              label="Approved"
+              value={summary.approved}
+              tone="approved"
+              active={filter.id === "status" && filter.status === "APPROVED"}
+              onClick={() => toggleStatus("APPROVED")}
+            />
+            <Stat
+              label="Rejected"
+              value={summary.rejected}
+              tone="rejected"
+              active={filter.id === "status" && filter.status === "REJECTED"}
+              onClick={() => toggleStatus("REJECTED")}
+            />
+          </div>
+        </section>
+      )}
+
       <section className="overflow-hidden rounded-lg border border-ink/10 bg-white">
         <table className="w-full text-left text-sm">
           <thead className="bg-ink/5 text-xs uppercase tracking-wide text-ink/60">
@@ -172,32 +198,47 @@ export default function DashboardPage() {
   );
 }
 
+const STAT_TONE = {
+  default: {
+    idle: "border-ink/10 bg-white hover:border-forest/40",
+    active: "border-forest bg-emerald-50 ring-2 ring-forest/30",
+  },
+  accent: {
+    idle: "border-rose-200 bg-rose-50 hover:border-rose-300",
+    active: "border-rose-400 bg-rose-100 ring-2 ring-rose-300",
+  },
+  approved: {
+    idle: "border-emerald-200 bg-white hover:border-emerald-400",
+    active: "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-300",
+  },
+  rejected: {
+    idle: "border-rose-200 bg-white hover:border-rose-400",
+    active: "border-rose-500 bg-rose-50 ring-2 ring-rose-300",
+  },
+};
+
 function Stat({
   label,
   value,
   accent,
+  tone,
   active,
   onClick,
 }: {
   label: string;
   value: number;
   accent?: boolean;
+  tone?: keyof typeof STAT_TONE;
   active?: boolean;
   onClick: () => void;
 }) {
+  const colors = STAT_TONE[tone ?? (accent ? "accent" : "default")];
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg border px-4 py-3 text-left ${
-        active
-          ? accent
-            ? "border-rose-400 bg-rose-100 ring-2 ring-rose-300"
-            : "border-forest bg-emerald-50 ring-2 ring-forest/30"
-          : accent
-            ? "border-rose-200 bg-rose-50 hover:border-rose-300"
-            : "border-ink/10 bg-white hover:border-forest/40"
-      }`}
+      aria-pressed={active}
+      className={`rounded-lg border px-4 py-3 text-left ${active ? colors.active : colors.idle}`}
     >
       <p className="text-xs uppercase tracking-wide text-ink/50">{label}</p>
       <p className="mt-1 text-2xl font-semibold">{value}</p>

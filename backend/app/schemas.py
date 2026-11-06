@@ -174,6 +174,8 @@ class QueueSummary(BaseModel):
     ready_for_decision: int
     returned: int
     high_priority_discrepancies: int
+    approved: int = 0
+    rejected: int = 0
 
 
 class OcrScanOut(BaseModel):

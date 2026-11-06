@@ -179,7 +179,9 @@ async def queue_summary(
     db: AsyncSession = Depends(get_db),
     _: Officer = Depends(get_current_officer),
 ) -> QueueSummary:
-    result = await db.execute(select(Application))
+    # attention_for() reads application.ai_runs, so it must be eager-loaded:
+    # a lazy load here would raise MissingGreenlet under the async session.
+    result = await db.execute(select(Application).options(selectinload(Application.ai_runs)))
     applications = result.scalars().all()
     discrepancies = 0
     counts = {status: 0 for status in ApplicationStatus}
@@ -194,6 +196,8 @@ async def queue_summary(
         ready_for_decision=counts[ApplicationStatus.READY_FOR_DECISION],
         returned=counts[ApplicationStatus.RETURNED],
         high_priority_discrepancies=discrepancies,
+        approved=counts[ApplicationStatus.APPROVED],
+        rejected=counts[ApplicationStatus.REJECTED],
     )
 
 
