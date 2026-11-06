@@ -18,6 +18,16 @@ Block Land and Land Reforms Office (BLLRO) field workers and revenue inspectors 
 
 The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workflow system for extension-level officers. It gives them a priority queue, an enforced three-step case flow, targeted AI checks for document mismatches, and a full audit history for every application.
 
+### What a worker can do
+
+| Requirement | How the app does it |
+| --- | --- |
+| See an overview of pending applications and what needs attention first | The **Priority work queue** dashboard ranks open files: ownership mismatches ready for decision first, then other decisions waiting, then flagged field checks, returned files, field checks and new intakes. Within each group, the longest-waiting file comes first. Each row says why it is there and what the next action is. Count cards filter by stage or show only flagged files. **Approved** and **Rejected** cards list decided files. |
+| Move each application through the steps (at least three) | Intake → Field verification → Ready for decision → Approved / Rejected / Returned, enforced by a state machine. |
+| Get AI assistance at each step, where it genuinely helps | OCR pre-fill at intake, an LLM ownership-chain check at verification, and an LLM-drafted return notice at decision (see below). |
+| Approve, reject or return, with the worker making the final call | Only the officer's button press changes status. AI output is advisory, approving a flagged file asks for confirmation, and an AI-drafted notice must be reviewed and confirmed. |
+| See a clear history of what happened to each application | Every application page has a **History** timeline: status changes with officer name and role, field edits (old → new), every AI run, the AI verdict at the moment of each decision, and the exact notice sent. It can be filtered by type. |
+
 ```text
 [ 1. Intake & Digitization ] --> [ 2. Field & Chain Verification ] --> [ 3. Final BLLRO Decision ]
          |                                    |                                    |
@@ -30,11 +40,11 @@ The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workfl
 
 **Officer action.** Logs application metadata (Mouza, J.L. No., Khatian No., Plot/Dag No., applicant details) and uploads scanned copies of the Sale Deed (Dalil) and existing Porcha.
 
-**AI assistance.** Runs OCR on uploaded Dalil and Porcha scans (PDF, image, or pasted text), extracts labelled Bengali/English fields, and fills blank form fields. The officer can edit every value before the file moves on.
+**Automated assistance.** Runs OCR (Tesseract) on uploaded Dalil and Porcha scans (PDF, image, or pasted text), extracts labelled Bengali/English fields with pattern matching, and fills blank form fields. This step uses no LLM. The officer can edit every value before the file moves on.
 
 ### Stage 2: Field and Chain Verification (`FIELD_VERIFICATION`)
 
-**Officer action.** Conducts physical and documentary checks to confirm the chain of ownership and land revenue tax (Khajna) payment status.
+**Officer action.** Conducts physical and documentary checks to confirm the chain of ownership and land revenue tax (Khajna) payment status. The officer corrects the Transferor, Recorded owner and Khajna fields if needed, clicks **Save verification notes**, then clicks **Run AI chain check**. The check reads the saved values and the uploaded scans.
 
 **AI assistance.** An OpenAI model reads the transferor on the new deed, the recorded owner on the existing Porcha, the khajna status and OCR excerpts from both scans. It returns a structured verdict: `MATCH`, `LIKELY_SAME_PERSON`, `POSSIBLE_LINK`, `MISMATCH` or `INSUFFICIENT_DATA`. With it come the reasons, what to check in the field, and which documents to ask for, plus a Bengali summary. Unlike an exact string comparison, it treats "বিমল দাস", "Bimol Kumar Das" and "Sri Bimal Das" as the same person. When the transferor shares a surname but not a given name, it says a link deed or legal heir certificate is needed. The officer runs it on demand from Stage 2; it also runs automatically when the file moves to decision, unless a current AI verdict already exists.
 
@@ -42,9 +52,9 @@ The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workfl
 
 **Officer action.** The officer makes the binding call:
 
-- **Approve.** Mutates the land record.
+- **Approve.** Records the mutation as approved. Updating the official record in Banglarbhumi stays outside this tool.
 - **Reject.** Denies invalid or fraudulent applications.
-- **Return.** Sends the application back requesting specific missing documents (for example, a legal heir certificate or updated tax receipt).
+- **Return.** Sends the application back requesting specific missing documents (for example, a legal heir certificate or updated tax receipt). When the citizen brings them, the officer clicks **Re-open at intake** and the file goes through the steps again.
 
 **AI assistance.** When the officer chooses **Return**, they list what is missing. The list is pre-filled from the chain check's "documents to ask for". The model then drafts a short, plain-language notice in Bengali or English. The officer edits the draft and must click **Confirm notice and return file**; nothing is saved to the record until they do. The history records whether the notice was the AI draft as-is, an edited AI draft, or written by the officer.
 
@@ -58,32 +68,36 @@ AI is used only where it saves officer time or surfaces risk early. The officer 
 
 | Where | What AI does | Why it helps |
 | --- | --- | --- |
-| Intake | OCR + labelled field extraction from Dalil / Porcha | Cuts repetitive typing from Bengali/English scans and reduces keying errors |
+| Intake | OCR (Tesseract) + pattern-based field extraction from Dalil / Porcha; no LLM | Cuts repetitive typing from Bengali/English scans and reduces keying errors. Labelled fields don't need a language model. |
 | Field verification | LLM ownership-chain assessment (verdict, reasons, field checks, documents to request) | Name matching across Bengali/English spellings and spotting inheritance gaps is judgment work that exact string matching gets wrong in both directions |
 | Decision / return | LLM-drafted return notice in Bengali or English, edited and confirmed by the officer | Citizens get clear, specific instructions in their language; officers stop retyping the same letter |
 | Audit | Every AI run is logged (`ai_runs`) with inputs/outputs, and shown in the history | Keeps suggestions reviewable and accountable |
 
-**Safeguards.** AI output is advisory and never changes status by itself. Document text is passed to the model as data inside `<document>` tags, never as instructions. If no `OPENAI_API_KEY` is set, or the API call fails, both features fall back to the earlier rules: exact name comparison and a fixed notice template. The UI labels such results "Rule-based" instead of "AI assessment", so the app still works offline. The queue reuses the latest stored AI verdict, so listing files never waits on a model call. If the officer edits the names, that verdict is marked stale.
+**Safeguards.** AI output is advisory and never changes status by itself. Document text is passed to the model as data inside `<document>` tags, never as instructions. Scans stay on the server; only the names, plot details, khajna status and up to 4,000 characters of OCR text per document are sent to the OpenAI API. A government deployment would need a data-processing agreement or a model hosted in India. If no `OPENAI_API_KEY` is set, or the API call fails, both features fall back to the earlier rules: exact name comparison and a fixed notice template. The UI labels such results "Rule-based" instead of "AI assessment", so the app still works offline. The queue reuses the latest stored AI verdict, so listing files never waits on a model call. If the officer edits the names, that verdict is marked stale.
 
 The design is deliberately narrow: high-yield document and naming checks, not full case adjudication. That keeps the model useful in a regulated workflow without replacing inspector judgment.
 
 ## How you would measure the app's impact, and why you think it will work
 
-**Impact metrics**
+**How to measure it.** Run a pilot in one block for 8–12 weeks. Record the same metrics from the paper register for the 3 months before the pilot as a baseline. Most metrics come straight from the app's own tables: `application_history` holds every status change and edit with a timestamp and officer, and `ai_runs` holds every AI suggestion.
 
-- **Cycle time:** median days from intake (`SUBMITTED`) to final status (`APPROVED` / `REJECTED` / `RETURNED`)
-- **Queue health:** backlog size, age of oldest open file, share of high-priority discrepancy cases
-- **Officer effort:** time to complete intake (with vs without OCR pre-fill); share of fields accepted vs manually corrected
-- **Quality:** rate of chain-mismatch flags that officers confirm as real issues; return rate for missing documents after AI-assisted notices
-- **Adoption:** active officers per week, applications processed per officer, % of cases with at least one AI assist used
-- **Trust / compliance:** % of status transitions with officer remarks; audit completeness (history + AI run coverage)
+| Metric | How it is measured | What success looks like |
+| --- | --- | --- |
+| **Cycle time** | Median days from `SUBMITTED` to `APPROVED` / `REJECTED` (`application_history` timestamps) | Clearly shorter than the paper baseline |
+| **Repeat visits** | Share of files returned more than once (count of `RETURNED` entries per file) | Falls, because AI notices list every missing paper the first time |
+| **Queue health** | Open backlog, age of the oldest open file, flagged files waiting | Oldest-file age stops growing |
+| **Officer effort** | Intake time with vs without OCR pre-fill; share of pre-filled fields the officer then edits (`FIELD_UPDATE` entries) | Faster intake, with few corrections |
+| **AI quality** | Of files the chain check flagged, the share the officer returned or rejected (flag confirmed) vs approved anyway (overridden); of AI notices, the share confirmed unedited (`notice_source`) | High confirmation rate; overrides reviewed monthly to tune the prompt |
+| **Wrong approvals caught** | Approved files later challenged or reversed, flagged vs unflagged | Fewer reversals than baseline |
+| **Adoption** | Active officers per week; share of files with at least one AI run | Officers keep using it after the first weeks |
 
 **Why it should work**
 
-- The pain is operational and repetitive (typing, comparing names, drafting return notes), which is a good fit for assistive OCR and rule-like checks.
+- The pain is operational and repetitive (typing, comparing names across spellings, drafting return letters). That suits OCR plus a narrowly scoped language model.
 - The workflow mirrors how officers already move files, so adoption does not require inventing a new process.
 - Human-in-the-loop decisions plus an explicit state machine reduce the risk of AI overreach or invalid approvals.
 - Early discrepancy flags and clearer return notices should cut rework loops for both officers and citizens.
+- Every AI suggestion and every officer override is recorded, so the AI's usefulness can be checked from data rather than assumed.
 
 ## Your main technical decisions
 
@@ -100,7 +114,7 @@ The design is deliberately narrow: high-yield document and naming checks, not fu
 
 ### Key capabilities
 
-- Priority work queue dashboard for pending items, high-priority discrepancies, and field checks
+- Priority work queue dashboard for pending items, high-priority discrepancies, and field checks, with Approved and Rejected cards for decided files
 - Three-step enforced workflow from intake to decision
 - Targeted AI for OCR, ownership mismatch detection, and bilingual notice drafting
 - One history timeline per file: status changes with officer name and role, edits to the verification fields (old → new), every AI run, the ownership verdict at the time of each decision, and the exact notice sent. It can be filtered to status changes, edits, or AI activity.
@@ -164,7 +178,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `id` | UUID | Primary key |
 | `application_id` | UUID | FK → `applications.id` |
 | `document_type` | Enum | `SALE_DEED`, `PORCHA`, `OTHER` |
-| `blob_key` | Text | Unique object key in MinIO |
+| `blob_key` | Text | Unique object key in blob storage (local folder or MinIO/S3) |
 | `original_filename` | Text | |
 | `content_type` | Text | |
 | `size_bytes` | Integer | |
@@ -239,7 +253,21 @@ Officers sign in at `/login`. Application and AI routes require a valid session.
 
 ### AI (optional)
 
-Set `OPENAI_API_KEY` in `backend/.env` to turn on the LLM chain check and notice drafting. `OPENAI_MODEL` defaults to `gpt-5.5`. Without a key, the app uses the rule-based fallbacks and labels them as such.
+Set `OPENAI_API_KEY` in `backend/.env` to turn on the LLM chain check and notice drafting. `OPENAI_MODEL` defaults to `gpt-5.5`. Without a key, or with `LLM_ENABLED=false`, the app uses the rule-based fallbacks and labels them as such.
+
+### Try it
+
+[`test-docs/`](test-docs/) has sample Dalil and Porcha files for three scenarios (inheritance gap, spelling variant, clear mismatch), with the expected AI verdict for each. They are plain `.txt` files, so they work without Tesseract. See [`test-docs/README.md`](test-docs/README.md) for a step-by-step walkthrough.
+
+### Tests
+
+```bash
+cd backend
+venv\Scripts\python -m unittest discover -s tests   # Windows
+# python -m unittest discover -s tests              # macOS / Linux, with the venv active
+```
+
+The AI tests mock the OpenAI API, so they need no key.
 
 ### OCR
 
