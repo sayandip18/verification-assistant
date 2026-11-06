@@ -4,7 +4,8 @@ import asyncio
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai import chain_mismatch, draft_notice, extract_metadata, merge_extracted
+from app.ai import extract_metadata, merge_extracted
+from app.llm import assess_chain, compose_notice
 from app.blob import get_bytes
 from app.models import AiRun, Application, Document, PipelineName, PipelineStatus
 from app.ocr import OcrError, ocr_bytes
@@ -66,8 +67,31 @@ async def run_ocr(db: AsyncSession, application: Application, document: Document
     return run
 
 
+def _latest_ocr_excerpts(application: Application) -> dict[str, str]:
+    latest: dict[str, AiRun] = {}
+    docs = {document.id: document for document in application.documents}
+    for run in application.ai_runs:
+        if run.pipeline != PipelineName.OCR or run.status != PipelineStatus.SUCCEEDED:
+            continue
+        document = docs.get(run.document_id)
+        kind = document.document_type.value if document else "OTHER"
+        if kind not in latest or run.created_at >= latest[kind].created_at:
+            latest[kind] = run
+    return {kind: (run.output_payload or {}).get("raw_text") or "" for kind, run in latest.items()}
+
+
 async def run_chain_check(db: AsyncSession, application: Application) -> dict:
-    result = chain_mismatch(application.transferor_name, application.recorded_owner_name)
+    excerpts = _latest_ocr_excerpts(application)
+    result = await assess_chain(
+        transferor=application.transferor_name,
+        owner=application.recorded_owner_name,
+        applicant=application.applicant_name,
+        khajna=application.khajna_status,
+        mouza=application.mouza,
+        dag=application.dag_number,
+        khatian=application.khatian_number,
+        excerpts=excerpts,
+    )
     db.add(
         AiRun(
             application_id=application.id,
@@ -76,6 +100,8 @@ async def run_chain_check(db: AsyncSession, application: Application) -> dict:
             input_payload={
                 "transferor_name": application.transferor_name,
                 "recorded_owner_name": application.recorded_owner_name,
+                "khajna_status": application.khajna_status,
+                "documents": sorted(excerpts),
             },
             output_payload=result,
         )
@@ -84,16 +110,24 @@ async def run_chain_check(db: AsyncSession, application: Application) -> dict:
 
 
 async def run_notice_draft(
-    db: AsyncSession, application: Application, missing_items: list[str], language: str
-) -> str:
-    notice = draft_notice(application.applicant_name, application.mouza, missing_items, language)
-    db.add(
-        AiRun(
-            application_id=application.id,
-            pipeline=PipelineName.NOTICE,
-            status=PipelineStatus.SUCCEEDED,
-            input_payload={"missing_items": missing_items, "language": language},
-            output_payload={"notice": notice},
-        )
+    db: AsyncSession, application: Application, officer_notes: str, language: str, chain: dict | None
+) -> dict:
+    result = await compose_notice(
+        applicant=application.applicant_name,
+        mouza=application.mouza,
+        dag=application.dag_number,
+        khatian=application.khatian_number,
+        officer_notes=officer_notes,
+        language=language,
+        chain=chain,
     )
-    return notice
+    run = AiRun(
+        application_id=application.id,
+        pipeline=PipelineName.NOTICE,
+        status=PipelineStatus.SUCCEEDED,
+        input_payload={"officer_notes": officer_notes, "language": language},
+        output_payload=result,
+    )
+    db.add(run)
+    await db.flush()
+    return {**result, "ai_run_id": str(run.id), "language": language}

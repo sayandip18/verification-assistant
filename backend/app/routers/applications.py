@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.attention import CLOSED_STATUSES, attention_for, attention_sort_key
+from app.attention import CLOSED_STATUSES, attention_for, attention_sort_key, current_chain
 from app.blob import make_blob_key, put_bytes
 from app.database import get_db
 from app.deps import get_current_officer
@@ -20,6 +20,7 @@ from app.models import (
     DocumentType,
     Officer,
     PipelineName,
+    PipelineStatus,
 )
 from app.pipeline import run_chain_check, run_notice_draft, run_ocr
 from app.schemas import (
@@ -27,6 +28,9 @@ from app.schemas import (
     ApplicationOut,
     ApplicationUpdate,
     ExtractedMetadata,
+    AiRunOut,
+    NoticeDraftOut,
+    NoticeDraftRequest,
     OcrResultOut,
     QueueSummary,
     TransitionRequest,
@@ -34,8 +38,22 @@ from app.schemas import (
 from app.state_machine import assert_transition
 
 router = APIRouter(prefix="/applications", tags=["applications"])
-LOAD_OPTIONS = (selectinload(Application.history), selectinload(Application.documents))
-LOAD_DETAIL = (*LOAD_OPTIONS, selectinload(Application.ai_runs))
+LOAD_OPTIONS = (
+    selectinload(Application.history).selectinload(ApplicationHistory.officer),
+    selectinload(Application.documents),
+    selectinload(Application.ai_runs),
+)
+LOAD_DETAIL = LOAD_OPTIONS
+AUDITED_FIELDS = (
+    "applicant_name",
+    "mouza",
+    "jl_number",
+    "dag_number",
+    "khatian_number",
+    "transferor_name",
+    "recorded_owner_name",
+    "khajna_status",
+)
 
 
 def _ocr_results(application: Application) -> list[OcrResultOut]:
@@ -72,6 +90,54 @@ def _ocr_results(application: Application) -> list[OcrResultOut]:
     return results
 
 
+def _ai_run_summary(run: AiRun, docs: dict) -> AiRunOut:
+    output = run.output_payload or {}
+    inputs = run.input_payload or {}
+    detail: dict = {}
+    if run.pipeline == PipelineName.OCR:
+        document = docs.get(run.document_id)
+        name = document.original_filename if document else "document"
+        applied = output.get("applied_fields") or []
+        if run.status == PipelineStatus.FAILED:
+            summary = f"OCR failed on {name}: {output.get('error') or 'unknown error'}"
+        else:
+            summary = f"OCR read {name}" + (f"; filled {', '.join(applied)}" if applied else "")
+        detail = {"applied_fields": applied, "filename": name}
+    elif run.pipeline == PipelineName.CHAIN_CHECK:
+        summary = output.get("summary") or output.get("message")
+        detail = {
+            key: output.get(key)
+            for key in (
+                "verdict",
+                "confidence",
+                "flagged",
+                "severity",
+                "summary_bn",
+                "reasons",
+                "suggested_checks",
+                "documents_to_request",
+                "warning",
+            )
+        }
+        detail["transferor_name"] = inputs.get("transferor_name")
+        detail["recorded_owner_name"] = inputs.get("recorded_owner_name")
+    else:
+        language = inputs.get("language")
+        summary = "Return notice drafted in " + ("Bengali" if language == "bn" else "English")
+        detail = {"notice": output.get("notice"), "language": language, "warning": output.get("warning")}
+    return AiRunOut(
+        id=run.id,
+        pipeline=run.pipeline,
+        status=run.status,
+        engine=output.get("engine"),
+        model=output.get("model"),
+        summary=summary,
+        detail=detail,
+        document_id=run.document_id,
+        created_at=run.created_at,
+    )
+
+
 def _with_flag(application: Application, *, include_ocr: bool = True) -> ApplicationOut:
     payload = ApplicationOut.model_validate(application)
     info = attention_for(application)
@@ -79,8 +145,19 @@ def _with_flag(application: Application, *, include_ocr: bool = True) -> Applica
     payload.attention_rank = info.rank
     payload.attention_reason = info.reason
     payload.next_action = info.next_action
+    actors = {entry.id: entry.officer for entry in application.history}
+    for entry in payload.history:
+        officer = actors.get(entry.id)
+        if officer is not None:
+            entry.actor_name = officer.full_name
+            entry.actor_role = officer.role
     if include_ocr:
         payload.ocr_results = _ocr_results(application)
+        docs = {document.id: document for document in application.documents}
+        runs = sorted(application.ai_runs, key=lambda run: run.created_at)
+        payload.ai_runs = [_ai_run_summary(run, docs) for run in runs]
+    else:
+        payload.ai_runs = []
     return payload
 
 
@@ -180,11 +257,26 @@ async def update_application(
     application_id: uuid.UUID,
     payload: ApplicationUpdate,
     db: AsyncSession = Depends(get_db),
-    _: Officer = Depends(get_current_officer),
+    officer: Officer = Depends(get_current_officer),
 ) -> ApplicationOut:
     application = await _get_application(application_id, db)
+    changes: dict[str, dict] = {}
     for key, value in payload.model_dump(exclude_unset=True).items():
+        before = getattr(application, key)
+        if key in AUDITED_FIELDS and (before or None) != (value or None):
+            changes[key] = {"from": before, "to": value}
         setattr(application, key, value)
+    if changes:
+        db.add(
+            ApplicationHistory(
+                application_id=application.id,
+                previous_status=application.status,
+                new_status=application.status,
+                action_taken_by=officer.id,
+                ai_flags_triggered={"kind": "FIELD_UPDATE", "changes": changes},
+                officer_remarks=None,
+            )
+        )
     await db.commit()
     return _with_flag(await _get_application(application_id, db))
 
@@ -243,6 +335,39 @@ async def rerun_document_ocr(
     return _with_flag(await _get_application(application_id, db))
 
 
+@router.post("/{application_id}/chain-check", response_model=ApplicationOut)
+async def chain_check(
+    application_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: Officer = Depends(get_current_officer),
+) -> ApplicationOut:
+    """Run the AI ownership-chain check on demand. Advisory only; it changes no status."""
+    application = await _get_application(application_id, db)
+    await run_chain_check(db, application)
+    await db.commit()
+    return _with_flag(await _get_application(application_id, db))
+
+
+@router.post("/{application_id}/notice-draft", response_model=NoticeDraftOut)
+async def notice_draft(
+    application_id: uuid.UUID,
+    payload: NoticeDraftRequest,
+    db: AsyncSession = Depends(get_db),
+    _: Officer = Depends(get_current_officer),
+) -> NoticeDraftOut:
+    """Draft a return notice for the officer to review. Nothing goes into the history here."""
+    application = await _get_application(application_id, db)
+    if application.status != ApplicationStatus.READY_FOR_DECISION:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A return notice can only be drafted when the file is ready for decision.",
+        )
+    chain = current_chain(application)
+    result = await run_notice_draft(db, application, payload.officer_notes, payload.language, chain)
+    await db.commit()
+    return NoticeDraftOut(**result)
+
+
 @router.post("/{application_id}/transition", response_model=ApplicationOut)
 async def transition(
     application_id: uuid.UUID,
@@ -257,12 +382,27 @@ async def transition(
     remarks = payload.officer_remarks
 
     if payload.new_status == ApplicationStatus.READY_FOR_DECISION:
-        flags = await run_chain_check(db, application)
+        existing = current_chain(application)
+        if existing.get("engine") == "llm" and not existing.get("stale"):
+            flags = existing
+        else:
+            flags = await run_chain_check(db, application)
     if payload.new_status == ApplicationStatus.RETURNED:
-        missing = [remarks] if remarks else ["supporting documents"]
-        drafted = await run_notice_draft(db, application, missing, payload.language)
-        remarks = drafted
-        flags = {"notice": drafted, "language": payload.language}
+        notice = (payload.notice or "").strip()
+        if not notice:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Review and confirm the return notice before returning the file.",
+            )
+        flags = {
+            "kind": "RETURN_NOTICE",
+            "notice": notice,
+            "language": payload.language,
+            "notice_source": payload.notice_source or "officer",
+            "notice_ai_run_id": str(payload.notice_ai_run_id) if payload.notice_ai_run_id else None,
+        }
+    elif payload.new_status in (ApplicationStatus.APPROVED, ApplicationStatus.REJECTED):
+        flags = {"kind": "DECISION", "chain_at_decision": current_chain(application)}
 
     db.add(
         ApplicationHistory(

@@ -2,7 +2,8 @@ import asyncio
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
-from app.ai import draft_notice, extract_metadata
+from app.ai import extract_metadata
+from app.llm import compose_notice
 from app.deps import get_current_officer
 from app.models import DocumentType, Officer, PipelineStatus
 from app.ocr import OcrError, ocr_bytes
@@ -53,9 +54,14 @@ async def ocr_scan(
 
 
 @router.post("/notice")
-async def notice(payload: NoticeRequest, _: Officer = Depends(get_current_officer)) -> dict[str, str]:
-    return {
-        "draft": draft_notice(
-            payload.applicant_name, payload.mouza, payload.missing_items, payload.language
-        )
-    }
+async def notice(payload: NoticeRequest, _: Officer = Depends(get_current_officer)) -> dict:
+    result = await compose_notice(
+        applicant=payload.applicant_name,
+        mouza=payload.mouza,
+        dag=None,
+        khatian=None,
+        officer_notes="\n".join(payload.missing_items),
+        language=payload.language,
+        chain=None,
+    )
+    return {"draft": result["notice"], "engine": result["engine"], "warning": result["warning"]}

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.ai import chain_mismatch
-from app.models import Application, ApplicationStatus
+from app.models import Application, ApplicationStatus, PipelineName, PipelineStatus
 
 CLOSED_STATUSES = {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED}
 
@@ -25,12 +25,35 @@ class Attention:
     closed: bool
 
 
+def current_chain(application: Application) -> dict:
+    """Latest chain check for the names currently on file.
+
+    Uses the most recent stored AI assessment when its inputs still match the
+    application; otherwise falls back to the exact-name rule so the queue never
+    waits on a model call.
+    """
+    transferor = application.transferor_name
+    owner = application.recorded_owner_name
+    latest = None
+    for run in getattr(application, "ai_runs", None) or []:
+        if run.pipeline != PipelineName.CHAIN_CHECK or run.status != PipelineStatus.SUCCEEDED:
+            continue
+        if latest is None or run.created_at >= latest.created_at:
+            latest = run
+    if latest is not None:
+        inputs = latest.input_payload or {}
+        if inputs.get("transferor_name") == transferor and inputs.get("recorded_owner_name") == owner:
+            return {**(latest.output_payload or {}), "checked_at": latest.created_at.isoformat(), "stale": False}
+    rules = chain_mismatch(transferor, owner)
+    return {**rules, "engine": "rules", "stale": latest is not None}
+
+
 def is_flagged(application: Application) -> bool:
-    return bool(chain_mismatch(application.transferor_name, application.recorded_owner_name)["flagged"])
+    return bool(current_chain(application)["flagged"])
 
 
 def attention_for(application: Application) -> Attention:
-    mismatch = chain_mismatch(application.transferor_name, application.recorded_owner_name)
+    mismatch = current_chain(application)
     flagged = bool(mismatch["flagged"])
     status = application.status
     closed = status in CLOSED_STATUSES

@@ -20,10 +20,24 @@ export type Officer = {
   is_active: boolean;
 };
 
+export type ChainVerdict = "MATCH" | "LIKELY_SAME_PERSON" | "POSSIBLE_LINK" | "MISMATCH" | "INSUFFICIENT_DATA";
+
 export type MismatchFlag = {
   flagged: boolean;
-  severity: "info" | "ok" | "high";
+  severity: "info" | "ok" | "medium" | "high";
   message: string;
+  verdict?: ChainVerdict;
+  confidence?: "low" | "medium" | "high" | null;
+  summary?: string | null;
+  summary_bn?: string | null;
+  reasons?: string[];
+  suggested_checks?: string[];
+  documents_to_request?: string[];
+  engine?: "llm" | "rules";
+  model?: string | null;
+  warning?: string | null;
+  checked_at?: string;
+  stale?: boolean;
 };
 
 export type HistoryEntry = {
@@ -34,6 +48,29 @@ export type HistoryEntry = {
   ai_flags_triggered: unknown;
   officer_remarks: string | null;
   created_at: string;
+  actor_name: string | null;
+  actor_role: OfficerRole | null;
+};
+
+export type AiRunSummary = {
+  id: string;
+  pipeline: "OCR" | "CHAIN_CHECK" | "NOTICE";
+  status: "PENDING" | "SUCCEEDED" | "FAILED";
+  engine: "llm" | "rules" | string | null;
+  model: string | null;
+  summary: string | null;
+  detail: Record<string, unknown>;
+  document_id: string | null;
+  created_at: string;
+};
+
+export type NoticeDraft = {
+  notice: string;
+  language: "en" | "bn";
+  engine: "llm" | "rules";
+  model: string | null;
+  warning: string | null;
+  ai_run_id: string;
 };
 
 export type Document = {
@@ -100,6 +137,7 @@ export type Application = {
   documents: Document[];
   mismatch_flag: MismatchFlag | null;
   ocr_results: OcrResult[];
+  ai_runs: AiRunSummary[];
   attention_rank: number;
   attention_reason: string | null;
   next_action: string | null;

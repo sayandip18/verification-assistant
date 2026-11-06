@@ -21,8 +21,9 @@ The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workfl
 ```text
 [ 1. Intake & Digitization ] --> [ 2. Field & Chain Verification ] --> [ 3. Final BLLRO Decision ]
          |                                    |                                    |
-  AI document OCR                      AI chain mismatch                    AI notice and
-  and field pre-filling                discrepancy check                    remark generator
+  OCR + field                          LLM ownership-chain                  LLM return-notice
+  pre-filling                          assessment                           draft (officer edits
+                                                                            and confirms)
 ```
 
 ### Stage 1: Intake and Digitization (`SUBMITTED`)
@@ -35,7 +36,7 @@ The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workfl
 
 **Officer action.** Conducts physical and documentary checks to confirm the chain of ownership and land revenue tax (Khajna) payment status.
 
-**AI assistance.** Compares the transferor named on the new deed against the recorded owner on the existing Porcha. Automatically flags discrepancies, for example: "Warning: Transferor 'Aparna Das' does not match recorded owner 'Bimal Das'. Check for inheritance link deed."
+**AI assistance.** An OpenAI model reads the transferor on the new deed, the recorded owner on the existing Porcha, the khajna status and OCR excerpts from both scans. It returns a structured verdict: `MATCH`, `LIKELY_SAME_PERSON`, `POSSIBLE_LINK`, `MISMATCH` or `INSUFFICIENT_DATA`. With it come the reasons, what to check in the field, and which documents to ask for, plus a Bengali summary. Unlike an exact string comparison, it treats "বিমল দাস", "Bimol Kumar Das" and "Sri Bimal Das" as the same person. When the transferor shares a surname but not a given name, it says a link deed or legal heir certificate is needed. The officer runs it on demand from Stage 2; it also runs automatically when the file moves to decision, unless a current AI verdict already exists.
 
 ### Stage 3: Decision and Resolution (`READY_FOR_DECISION`)
 
@@ -45,7 +46,9 @@ The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workfl
 - **Reject.** Denies invalid or fraudulent applications.
 - **Return.** Sends the application back requesting specific missing documents (for example, a legal heir certificate or updated tax receipt).
 
-**AI assistance.** Generates a pre-drafted official remark in English or Bengali detailing missing requirements when an application is marked returned.
+**AI assistance.** When the officer chooses **Return**, they list what is missing. The list is pre-filled from the chain check's "documents to ask for". The model then drafts a short, plain-language notice in Bengali or English. The officer edits the draft and must click **Confirm notice and return file**; nothing is saved to the record until they do. The history records whether the notice was the AI draft as-is, an edited AI draft, or written by the officer.
+
+Approving a file the chain check flagged asks the officer to confirm first.
 
 Invalid jumps (for example, `SUBMITTED` directly to `APPROVED`) are rejected by a code-level state machine.
 
@@ -56,9 +59,11 @@ AI is used only where it saves officer time or surfaces risk early. The officer 
 | Where | What AI does | Why it helps |
 | --- | --- | --- |
 | Intake | OCR + labelled field extraction from Dalil / Porcha | Cuts repetitive typing from Bengali/English scans and reduces keying errors |
-| Field verification | Ownership chain mismatch check (transferor vs recorded owner) | Catches inheritance / link-deed gaps before a bad approval |
-| Decision / return | Bilingual notice and remark drafting | Speeds clear citizen-facing instructions when files are returned |
-| Audit | Every AI run is logged (`ai_runs`) with inputs/outputs | Keeps suggestions reviewable and accountable |
+| Field verification | LLM ownership-chain assessment (verdict, reasons, field checks, documents to request) | Name matching across Bengali/English spellings and spotting inheritance gaps is judgment work that exact string matching gets wrong in both directions |
+| Decision / return | LLM-drafted return notice in Bengali or English, edited and confirmed by the officer | Citizens get clear, specific instructions in their language; officers stop retyping the same letter |
+| Audit | Every AI run is logged (`ai_runs`) with inputs/outputs, and shown in the history | Keeps suggestions reviewable and accountable |
+
+**Safeguards.** AI output is advisory and never changes status by itself. Document text is passed to the model as data inside `<document>` tags, never as instructions. If no `OPENAI_API_KEY` is set, or the API call fails, both features fall back to the earlier rules: exact name comparison and a fixed notice template. The UI labels such results "Rule-based" instead of "AI assessment", so the app still works offline. The queue reuses the latest stored AI verdict, so listing files never waits on a model call. If the officer edits the names, that verdict is marked stale.
 
 The design is deliberately narrow: high-yield document and naming checks, not full case adjudication. That keeps the model useful in a regulated workflow without replacing inspector judgment.
 
@@ -88,7 +93,8 @@ The design is deliberately narrow: high-yield document and naming checks, not fu
 | API | Python FastAPI monolith | One service for auth, workflow, OCR, and AI pipelines; simple to deploy locally |
 | Persistence | PostgreSQL | Structured applications, officers, history, document metadata, and AI run logs |
 | Blob storage | Local object dir by default (MinIO/S3 optional) | Easy local demo; S3-compatible path when needed |
-| OCR / AI | Tesseract (`eng+ben`) + PDF text-layer extraction | Works offline for bilingual scans without a paid vision API dependency |
+| OCR | Tesseract (`eng+ben`) + PDF text-layer extraction | Works offline for bilingual scans without a paid vision API dependency |
+| LLM | OpenAI (`gpt-5.5` by default) via the official `openai` Python SDK, Chat Completions with strict JSON-schema structured output | Reliable, typed verdicts the UI can render; Bengali-capable; rule-based fallback when unavailable |
 | Workflow control | Explicit code-level state machine | Prevents illegal status jumps and keeps decisions auditable |
 | Auth model | Seeded / admin-created officers only | No public registration; matches staff-only BLLRO use |
 
@@ -97,7 +103,7 @@ The design is deliberately narrow: high-yield document and naming checks, not fu
 - Priority work queue dashboard for pending items, high-priority discrepancies, and field checks
 - Three-step enforced workflow from intake to decision
 - Targeted AI for OCR, ownership mismatch detection, and bilingual notice drafting
-- Complete audit trail of state changes, timestamps, officer remarks, and AI suggestions
+- One history timeline per file: status changes with officer name and role, edits to the verification fields (old → new), every AI run, the ownership verdict at the time of each decision, and the exact notice sent. It can be filtered to status changes, edits, or AI activity.
 
 ### Data model overview
 
@@ -147,7 +153,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `previous_status` | Enum | |
 | `new_status` | Enum | |
 | `action_taken_by` | UUID | FK → `officers.id` |
-| `ai_flags_triggered` | JSONB | |
+| `ai_flags_triggered` | JSONB | Context for the event. `kind` is `FIELD_UPDATE` (field edits, `previous_status == new_status`), `RETURN_NOTICE` (confirmed notice text, language and source) or `DECISION` (chain verdict at decision time) |
 | `officer_remarks` | Text | |
 | `created_at` | Timestamp | |
 
@@ -230,6 +236,10 @@ npm run dev
 The UI starts at [http://localhost:3000](http://localhost:3000). Browser calls go to `/api/*`, which Next.js proxies to the backend so the login cookie stays first-party.
 
 Officers sign in at `/login`. Application and AI routes require a valid session.
+
+### AI (optional)
+
+Set `OPENAI_API_KEY` in `backend/.env` to turn on the LLM chain check and notice drafting. `OPENAI_MODEL` defaults to `gpt-5.5`. Without a key, the app uses the rule-based fallbacks and labels them as such.
 
 ### OCR
 

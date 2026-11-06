@@ -1,4 +1,20 @@
-import type { Application, ApplicationDraft, ExtractedMetadata, Officer, OcrScan, QueueSummary } from "./types";
+import type {
+  Application,
+  ApplicationDraft,
+  ExtractedMetadata,
+  NoticeDraft,
+  Officer,
+  OcrScan,
+  QueueSummary,
+} from "./types";
+
+export type TransitionOptions = {
+  officer_remarks?: string;
+  language?: "en" | "bn";
+  notice?: string;
+  notice_source?: "ai" | "ai_edited" | "officer";
+  notice_ai_run_id?: string;
+};
 
 const API_URL = "/api";
 
@@ -49,10 +65,16 @@ export const api = {
     request<Application>("/applications", { method: "POST", body: JSON.stringify(payload) }),
   update: (id: string, payload: Partial<ApplicationDraft>) =>
     request<Application>(`/applications/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  transition: (id: string, new_status: string, officer_remarks?: string, language = "en") =>
+  transition: (id: string, new_status: string, options: TransitionOptions = {}) =>
     request<Application>(`/applications/${id}/transition`, {
       method: "POST",
-      body: JSON.stringify({ new_status, officer_remarks, language }),
+      body: JSON.stringify({ new_status, language: "en", ...options }),
+    }),
+  chainCheck: (id: string) => request<Application>(`/applications/${id}/chain-check`, { method: "POST" }),
+  draftNotice: (id: string, officer_notes: string, language: "en" | "bn") =>
+    request<NoticeDraft>(`/applications/${id}/notice-draft`, {
+      method: "POST",
+      body: JSON.stringify({ officer_notes, language }),
     }),
   extract: (raw_text: string, document_type?: string) =>
     request<ExtractedMetadata>("/ai/extract", {

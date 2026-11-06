@@ -14,3 +14,4 @@ boto3==1.35.99
 pytesseract==0.3.13
 pillow==11.1.0
 pypdfium2==4.30.0
+openai==3.46.0

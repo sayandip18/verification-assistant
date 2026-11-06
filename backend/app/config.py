@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     ocr_min_text_chars: int = 40
     ocr_max_bytes: int = 15 * 1024 * 1024
 
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.5"
+    llm_enabled: bool = True
+    llm_timeout_seconds: float = 60.0
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

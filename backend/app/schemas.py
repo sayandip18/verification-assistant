@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import ApplicationStatus, DocumentType, OfficerRole, PipelineStatus
+from app.models import ApplicationStatus, DocumentType, OfficerRole, PipelineName, PipelineStatus
 
 
 class LoginRequest(BaseModel):
@@ -50,6 +50,25 @@ class TransitionRequest(BaseModel):
     new_status: ApplicationStatus
     officer_remarks: str | None = None
     language: str = Field(default="en", pattern="^(en|bn)$")
+    # Return notice the officer reviewed and confirmed (required when returning).
+    notice: str | None = None
+    # How the confirmed notice was produced: AI draft as-is, AI draft edited, or written by the officer.
+    notice_source: Literal["ai", "ai_edited", "officer"] | None = None
+    notice_ai_run_id: uuid.UUID | None = None
+
+
+class NoticeDraftRequest(BaseModel):
+    officer_notes: str = ""
+    language: str = Field(default="en", pattern="^(en|bn)$")
+
+
+class NoticeDraftOut(BaseModel):
+    notice: str
+    language: str
+    engine: str
+    model: str | None = None
+    warning: str | None = None
+    ai_run_id: uuid.UUID
 
 
 class HistoryOut(BaseModel):
@@ -61,6 +80,22 @@ class HistoryOut(BaseModel):
     action_taken_by: uuid.UUID
     ai_flags_triggered: Any | None
     officer_remarks: str | None
+    created_at: datetime
+    actor_name: str | None = None
+    actor_role: OfficerRole | None = None
+
+
+class AiRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    pipeline: PipelineName
+    status: PipelineStatus
+    engine: str | None = None
+    model: str | None = None
+    summary: str | None = None
+    detail: dict[str, Any] = {}
+    document_id: uuid.UUID | None = None
     created_at: datetime
 
 
@@ -127,6 +162,7 @@ class ApplicationOut(BaseModel):
     documents: list[DocumentOut] = []
     mismatch_flag: dict | None = None
     ocr_results: list[OcrResultOut] = []
+    ai_runs: list[AiRunOut] = []
     attention_rank: int = 7
     attention_reason: str | None = None
     next_action: str | None = None
