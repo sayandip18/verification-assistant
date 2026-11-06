@@ -2,23 +2,21 @@
 
 A lightweight workflow management and AI assistance tool for field and extension-level revenue officers.
 
-## Executive Summary
+## The problem you chose and who it affects
 
-In rural and semi-urban West Bengal, citizens routinely submit applications for Land Mutation (Kharij / Namantaran) and Record of Rights (RoR / Porcha) updates following land purchases, inheritances, or family partitions.
+In rural and semi-urban West Bengal, citizens routinely submit applications for Land Mutation (Kharij / Namantaran) and Record of Rights (RoR / Porcha) updates after land purchases, inheritances, or family partitions.
 
-Currently, Block Land and Land Reforms Office (BLLRO) field workers and revenue inspectors process these requests through paper-heavy files, manual data entry into systems such as Banglarbhumi, and physical document checks. This creates processing backlogs and administrative fatigue.
+Block Land and Land Reforms Office (BLLRO) field workers and revenue inspectors still process many of these requests through paper files, manual entry into systems such as Banglarbhumi, and physical document checks. That creates processing backlogs, repeated visits for citizens, and administrative fatigue for officers.
 
-The BLLRO Land Mutation and Verification Assistant is a purpose-built, human-in-the-loop workflow management system designed specifically for extension-level officers. It simplifies daily queue management, provides targeted AI checks to spot document mismatches, and maintains a clean, transparent audit history for every land record application.
+**Who it affects**
 
-## Key Capabilities
+- **Citizens** waiting on mutation and RoR updates needed for ownership clarity, loans, and transfers
+- **Revenue inspectors and extension officers** who intake files, verify ownership chains, and decide cases
+- **BLLRO supervisors / block offices** that need transparent queues and auditable decisions
 
-- **Priority work queue dashboard.** Instant visual summary of pending items, high-priority discrepancies, and applications awaiting field checks.
-- **Three-step enforced workflow.** Clear state progression from initial intake to field verification and final decisioning.
-- **Targeted AI assistance.** High-yield tools for automated document parsing, ownership mismatch detection, and bilingual notice drafting.
-- **Human-in-the-loop authority.** The AI advises; the revenue inspector retains final decision authority (approve, reject, or return with comments).
-- **Complete audit trail.** Sequential event log capturing state changes, timestamps, officer remarks, and AI suggestions for regulatory compliance.
+## What the application does and the steps in your workflow
 
-## Core Application Workflow
+The BLLRO Land Mutation and Verification Assistant is a human-in-the-loop workflow system for extension-level officers. It gives them a priority queue, an enforced three-step case flow, targeted AI checks for document mismatches, and a full audit history for every application.
 
 ```text
 [ 1. Intake & Digitization ] --> [ 2. Field & Chain Verification ] --> [ 3. Final BLLRO Decision ]
@@ -29,7 +27,7 @@ The BLLRO Land Mutation and Verification Assistant is a purpose-built, human-in-
 
 ### Stage 1: Intake and Digitization (`SUBMITTED`)
 
-**Officer action.** Logs incoming application metadata (Mouza, J.L. No., Khatian No., Plot/Dag No., applicant details) and uploads scanned copies of the Sale Deed (Dalil) and existing Porcha.
+**Officer action.** Logs application metadata (Mouza, J.L. No., Khatian No., Plot/Dag No., applicant details) and uploads scanned copies of the Sale Deed (Dalil) and existing Porcha.
 
 **AI assistance.** Runs OCR on uploaded Dalil and Porcha scans (PDF, image, or pasted text), extracts labelled Bengali/English fields, and fills blank form fields. The officer can edit every value before the file moves on.
 
@@ -51,22 +49,61 @@ The BLLRO Land Mutation and Verification Assistant is a purpose-built, human-in-
 
 Invalid jumps (for example, `SUBMITTED` directly to `APPROVED`) are rejected by a code-level state machine.
 
-## Technology Stack
+## Where AI helps and why
 
-| Layer | Technology | Purpose |
+AI is used only where it saves officer time or surfaces risk early. The officer always retains final authority.
+
+| Where | What AI does | Why it helps |
 | --- | --- | --- |
-| Frontend | Next.js, React, Tailwind CSS | Officer UI; talks to the monolith through `/api` |
-| Backend | Python, FastAPI (monolith) | Auth, workflow state machine, OCR and AI pipeline |
-| Database | PostgreSQL | Officers, applications, history, document metadata, AI run logs |
-| Blob storage | Local object dir (MinIO/S3 optional) | Raw Dalil / Porcha scans |
-| AI / OCR | Tesseract (`eng+ben`) plus PDF text-layer extraction | Scan ingest, field pre-fill, discrepancy check, notice draft |
-| State machine | Explicit code-level enforcer | Prevents invalid status transitions |
+| Intake | OCR + labelled field extraction from Dalil / Porcha | Cuts repetitive typing from Bengali/English scans and reduces keying errors |
+| Field verification | Ownership chain mismatch check (transferor vs recorded owner) | Catches inheritance / link-deed gaps before a bad approval |
+| Decision / return | Bilingual notice and remark drafting | Speeds clear citizen-facing instructions when files are returned |
+| Audit | Every AI run is logged (`ai_runs`) with inputs/outputs | Keeps suggestions reviewable and accountable |
 
-## Data Model Overview
+The design is deliberately narrow: high-yield document and naming checks, not full case adjudication. That keeps the model useful in a regulated workflow without replacing inspector judgment.
+
+## How you would measure the app's impact, and why you think it will work
+
+**Impact metrics**
+
+- **Cycle time:** median days from intake (`SUBMITTED`) to final status (`APPROVED` / `REJECTED` / `RETURNED`)
+- **Queue health:** backlog size, age of oldest open file, share of high-priority discrepancy cases
+- **Officer effort:** time to complete intake (with vs without OCR pre-fill); share of fields accepted vs manually corrected
+- **Quality:** rate of chain-mismatch flags that officers confirm as real issues; return rate for missing documents after AI-assisted notices
+- **Adoption:** active officers per week, applications processed per officer, % of cases with at least one AI assist used
+- **Trust / compliance:** % of status transitions with officer remarks; audit completeness (history + AI run coverage)
+
+**Why it should work**
+
+- The pain is operational and repetitive (typing, comparing names, drafting return notes), which is a good fit for assistive OCR and rule-like checks.
+- The workflow mirrors how officers already move files, so adoption does not require inventing a new process.
+- Human-in-the-loop decisions plus an explicit state machine reduce the risk of AI overreach or invalid approvals.
+- Early discrepancy flags and clearer return notices should cut rework loops for both officers and citizens.
+
+## Your main technical decisions
+
+| Decision | Choice | Rationale |
+| --- | --- | --- |
+| UI | Next.js, React, Tailwind CSS | Fast officer-facing UI; `/api` proxy keeps the login cookie first-party |
+| API | Python FastAPI monolith | One service for auth, workflow, OCR, and AI pipelines; simple to deploy locally |
+| Persistence | PostgreSQL | Structured applications, officers, history, document metadata, and AI run logs |
+| Blob storage | Local object dir by default (MinIO/S3 optional) | Easy local demo; S3-compatible path when needed |
+| OCR / AI | Tesseract (`eng+ben`) + PDF text-layer extraction | Works offline for bilingual scans without a paid vision API dependency |
+| Workflow control | Explicit code-level state machine | Prevents illegal status jumps and keeps decisions auditable |
+| Auth model | Seeded / admin-created officers only | No public registration; matches staff-only BLLRO use |
+
+### Key capabilities
+
+- Priority work queue dashboard for pending items, high-priority discrepancies, and field checks
+- Three-step enforced workflow from intake to decision
+- Targeted AI for OCR, ownership mismatch detection, and bilingual notice drafting
+- Complete audit trail of state changes, timestamps, officer remarks, and AI suggestions
+
+### Data model overview
 
 PostgreSQL holds structured data. Raw files are not stored in the database; `documents.blob_key` points at object storage.
 
-### `officers`
+#### `officers`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -83,7 +120,7 @@ PostgreSQL holds structured data. Raw files are not stored in the database; `doc
 
 There is no public registration. Accounts are seeded or created by an administrator.
 
-### `applications`
+#### `applications`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -101,7 +138,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `created_by_officer_id` | UUID | FK → `officers.id` |
 | `created_at` / `updated_at` | Timestamp | |
 
-### `application_history`
+#### `application_history`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -114,7 +151,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `officer_remarks` | Text | |
 | `created_at` | Timestamp | |
 
-### `documents`
+#### `documents`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -128,7 +165,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `uploaded_by_officer_id` | UUID | FK → `officers.id` |
 | `created_at` | Timestamp | |
 
-### `ai_runs`
+#### `ai_runs`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -141,7 +178,7 @@ There is no public registration. Accounts are seeded or created by an administra
 | `output_payload` | JSONB | |
 | `created_at` | Timestamp | |
 
-## Getting Started Locally
+## How to run it locally
 
 ### Prerequisites
 
