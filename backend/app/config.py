@@ -1,3 +1,6 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,6 +38,25 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.5"
     llm_enabled: bool = True
     llm_timeout_seconds: float = 60.0
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_asyncpg_driver(cls, v: str) -> str:
+        # Hosted Postgres (Render/Neon) hands out plain postgres:// or postgresql:// URLs,
+        # which SQLAlchemy resolves to psycopg2. We only ship asyncpg.
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                v = "postgresql+asyncpg://" + v[len(prefix):]
+                break
+        # asyncpg doesn't understand libpq's sslmode / channel_binding params.
+        parts = urlsplit(v)
+        query = []
+        for k, val in parse_qsl(parts.query, keep_blank_values=True):
+            if k == "sslmode":
+                query.append(("ssl", val))
+            elif k != "channel_binding":
+                query.append((k, val))
+        return urlunsplit(parts._replace(query=urlencode(query)))
 
     @property
     def cors_origin_list(self) -> list[str]:
